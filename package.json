@@ -20,6 +20,7 @@
   },
   "homepage": "https://github.com/JLaField/Bookr#readme",
   "dependencies": {
+    "@hubspot/api-client": "^13.5.0",
     "express": "^5.2.1"
   },
   "devDependencies": {
