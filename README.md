@@ -17,3 +17,4 @@ This project is a work in progress, has not been thoroughly tested, and has know
 Known issues:
 
 - Meeting creation in HubSpot does not utilize the preferred appointment time from the client's phone call; instead defaults to the time the call was placed at
+- Longer calls (such as ones where the client updates their information) may not properly have their data added to the CRM
