@@ -321,6 +321,7 @@ async function createAppointment(params: {
 
   const meeting = await hubspotClient.crm.objects.meetings.basicApi.create({
     properties: {
+      hs_timestamp: new Date(startMs).toISOString(),
       hs_meeting_title: "Estimate appointment requested via AI call agent",
       hs_meeting_body: bodyParts.join("\n\n"),
       hs_meeting_start_time: new Date(startMs).toISOString(),
