@@ -76,12 +76,12 @@ app.get("/contacts", async (req: Request, res: Response) => {
   }
 });
 
-// Route to create contact and appointment from Retell Webhook
+// Route to create contact and appointment from Retell call
 app.post("/webhooks/retell", async (req: Request, res: Response) => {
   try {
     const payload = req.body as RetellWebhookPayload;
 
-    console.log(payload.event);
+    console.log("Payload event for retell call:" + payload.event);
 
     if (payload.event !== "call_analyzed") {
       // Acknowledge but ignore events we don't care about
