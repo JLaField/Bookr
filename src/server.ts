@@ -61,6 +61,18 @@ interface RetellWebhookPayload {
   call: RetellCall;
 }
 
+const MEETING_PROPERTIES = [
+  "hs_timestamp",
+  "hs_meeting_title",
+  "hs_meeting_body",
+  "hs_meeting_start_time",
+  "hs_meeting_end_time",
+  "hs_meeting_outcome",
+  "hs_internal_meeting_notes",
+  "hs_createdate",
+  "hs_lastmodifieddate"
+];
+
 const app: Application = express();
 const PORT = 8080;
 
@@ -82,6 +94,76 @@ app.get("/contacts", async (req: Request, res: Response) => {
   const result = await getContacts();
   if (result !== undefined) {
     res.status(200).json({ contacts: result });
+  }
+});
+
+/**
+ * GET /meetings
+ * Lists meeting (appointment) engagements, most recently created first.
+ *
+ * Query params:
+ *   limit  - number of results per page (default 10, max 100)
+ *   after  - pagination cursor from the previous response's `paging.next.after`
+ *   contactId - if provided, only returns meetings associated with this contact
+ */
+app.get("/meetings", async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(
+      parseInt((req.query.limit as string) ?? "10", 10) || 10,
+      100
+    );
+    const after = req.query.after as string | undefined;
+    const contactId = req.query.contactId as string | undefined;
+
+    if (contactId) {
+      // Fetch meetings associated with a specific contact via the associations API
+      const associations =
+        await hubspotClient.crm.associations.v4.basicApi.getPage(
+          "contacts",
+          contactId,
+          "meetings",
+          after,
+          limit
+        );
+
+      const meetingIds = associations.results.map((r) => r.toObjectId);
+
+      if (meetingIds.length === 0) {
+        return res
+          .status(200)
+          .json({ results: [], paging: associations.paging });
+      }
+
+      const batchResult =
+        await hubspotClient.crm.objects.meetings.batchApi.read({
+          properties: MEETING_PROPERTIES,
+          inputs: meetingIds.map((id) => ({ id: String(id) })),
+          propertiesWithHistory: []
+        });
+
+      return res.status(200).json({
+        results: batchResult.results,
+        paging: associations.paging
+      });
+    }
+
+    // No contact filter -> list meetings directly
+    const page = await hubspotClient.crm.objects.meetings.basicApi.getPage(
+      limit,
+      after,
+      MEETING_PROPERTIES,
+      undefined,
+      ["contacts"], // include associated contact IDs
+      false
+    );
+
+    return res.status(200).json({
+      results: page.results,
+      paging: page.paging
+    });
+  } catch (err) {
+    console.error("Error fetching meetings:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
