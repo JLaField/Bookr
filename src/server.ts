@@ -77,11 +77,6 @@ if (!hubspotKey) {
 // Initialize the HubSpot client using the Service Key as the accessToken
 const hubspotClient = new Client({ accessToken: hubspotKey });
 
-// Basic Route
-app.get("/", (req: Request, res: Response) => {
-  res.status(200).json({ message: "Hello from TypeScript Server!" });
-});
-
 // Route to get contacts from HubSpot
 app.get("/contacts", async (req: Request, res: Response) => {
   const result = await getContacts();
