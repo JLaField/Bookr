@@ -33,11 +33,11 @@ app.get("/", (req: Request, res: Response) => {
   res.status(200).json({ message: "Hello from TypeScript Server!" });
 });
 
+// Route to get contacts from HubSpot
 app.get("/contacts", async (req: Request, res: Response) => {
   const result = await getContacts();
   if (result !== undefined) {
-    // The function explicitly returned something
-    res.status(200).json({ message: result });
+    res.status(200).json({ contacts: result });
   }
 });
 
