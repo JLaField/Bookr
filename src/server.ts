@@ -81,6 +81,8 @@ app.post("/webhooks/retell", async (req: Request, res: Response) => {
   try {
     const payload = req.body as RetellWebhookPayload;
 
+    console.log(payload.event);
+
     if (payload.event !== "call_analyzed") {
       // Acknowledge but ignore events we don't care about
       return res.status(200).json({ received: true, skipped: true });
