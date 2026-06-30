@@ -4,7 +4,7 @@ Integrates call data from a Retell agent to HubSpot CRM
 
 ## Description
 
-This project is intended to serve as a bridge between a Retell Agent and Hubspot CRM for a fictitious painting company. The Retell Agent is setup to book appointments for painting estimates. This project is utilizes the "call" object from Retell's call_analyzed event to create a contact and meeting in HubSpot using a HTTP POST endpoint. It also provides read endpoints for both contacts and meetings in the company's HubSpot.
+This project is intended to serve as a bridge between a Retell Agent and Hubspot CRM for a fictitious painting company. The Retell Agent is setup to book appointments for painting estimates. This project is utilizes the "call" object from Retell's call_analyzed event to create a contact and meeting in HubSpot using a HTTP POST endpoint. It also provides read endpoints for both contacts and meetings from the company's HubSpot.
 
 This project is deployed to Google Cloud run, and the contact read endpoint is accessible at https://bookr-144109414225.us-west1.run.app/contacts.
 
