@@ -5,9 +5,13 @@ import { FilterOperatorEnum } from "@hubspot/api-client/lib/codegen/crm/contacts
 // Types for handling Retell Payload
 
 interface RetellCustomAnalysisData {
-  appointment_booked?: boolean;
-  appointment_date?: string; // e.g. "2024-05-07"
-  appointment_time?: string; // not always present, handled defensively
+  estimate_requested?: boolean;
+  preferred_time?: string; // free text, e.g. "Wednesday, July 2, 2025 at 12:00 PM Pacific"
+  site_address?: string;
+  customer_email?: string;
+  customer_phone?: string;
+  customer_name?: string;
+  job_scope?: string;
   [key: string]: unknown;
 }
 
@@ -19,10 +23,24 @@ interface RetellCallAnalysis {
   custom_analysis_data: RetellCustomAnalysisData;
 }
 
+interface RetellCollectedDynamicVariables {
+  previous_node?: string;
+  current_node?: string;
+  preferred_time?: string;
+  site_address?: string;
+  customer_email?: string;
+  customer_phone?: string;
+  customer_name?: string;
+  job_scope?: string;
+  [key: string]: unknown;
+}
+
 interface RetellCall {
   call_type: string;
   call_id: string;
   agent_id: string;
+  agent_version?: number;
+  agent_name?: string;
   call_status: string;
   from_number: string;
   to_number: string;
@@ -31,14 +49,10 @@ interface RetellCall {
   end_timestamp: number;
   duration_ms: number;
   disconnection_reason: string;
-  transcript: string;
-  transcript_object: unknown[];
-  transcript_with_tool_calls: unknown[];
   recording_url?: string;
   public_log_url?: string;
-  metadata?: Record<string, unknown>;
   retell_llm_dynamic_variables?: Record<string, unknown>;
-  opt_out_sensitive_data_storage: boolean;
+  collected_dynamic_variables?: RetellCollectedDynamicVariables;
   call_analysis: RetellCallAnalysis;
 }
 
@@ -83,36 +97,33 @@ app.post("/webhooks/retell", async (req: Request, res: Response) => {
 
     if (payload.event !== "call_analyzed") {
       // Acknowledge but ignore events we don't care about
-      console.log("Event was not call_analyzed");
       return res.status(200).json({ received: true, skipped: true });
     }
 
     const { call } = payload;
     const custom = call.call_analysis?.custom_analysis_data ?? {};
 
-    if (!custom.appointment_booked) {
+    if (!custom.estimate_requested) {
       // Nothing to create in HubSpot for this call
-      console.log("Appontment was not booked");
-      return res.status(200).json({ received: true, appointmentBooked: false });
+      return res.status(200).json({ received: true, estimateRequested: false });
     }
 
     const contactInfo = extractContactInfo(call);
     const contactId = await upsertContact(contactInfo);
 
-    const { startMs, endMs } = resolveAppointmentTime(custom);
+    const { startMs, endMs, parsed } = resolveAppointmentTime(
+      contactInfo.preferredTime
+    );
+
     const meetingId = await createAppointment({
       contactId,
       call,
+      jobScope: contactInfo.jobScope,
+      address: contactInfo.address,
       startMs,
-      endMs
+      endMs,
+      timeWasParsed: parsed
     });
-
-    console.log(
-      "Appointment booked - contactId: " +
-        contactId +
-        " meetingId: " +
-        meetingId
-    );
 
     return res.status(200).json({
       received: true,
@@ -128,67 +139,94 @@ app.post("/webhooks/retell", async (req: Request, res: Response) => {
 // ---------- Helpers ----------
 
 /**
- * Pulls a usable phone number, name, and email out of the call payload.
- * Retell doesn't give you a structured "caller name/email" field by default,
- * so we fall back to dynamic variables (commonly populated by your agent
- * prompt/config) and otherwise leave fields blank.
+ * Pulls contact info out of the call payload. The agent collects these as
+ * structured fields in `collected_dynamic_variables` (mirrored in
+ * `custom_analysis_data`), so we prefer those over guessing from raw call
+ * metadata. Falls back to the call's from/to number if no phone was
+ * explicitly collected.
  */
 function extractContactInfo(call: RetellCall) {
-  const dynamicVars = call.retell_llm_dynamic_variables ?? {};
+  const collected = call.collected_dynamic_variables ?? {};
+  const custom = call.call_analysis?.custom_analysis_data ?? {};
 
-  const fullName =
-    (dynamicVars["customer_name"] as string | undefined) ??
-    (dynamicVars["name"] as string | undefined) ??
-    "";
-
+  const fullName = collected.customer_name || custom.customer_name || "";
   const [firstName, ...rest] = fullName.trim().split(/\s+/).filter(Boolean);
   const lastName = rest.join(" ");
 
-  const email =
-    (dynamicVars["customer_email"] as string | undefined) ??
-    (dynamicVars["email"] as string | undefined) ??
-    undefined;
+  const emailRaw = collected.customer_email || custom.customer_email || "";
+  const email = emailRaw.trim() ? emailRaw.trim() : undefined;
 
-  const phone =
-    call.direction === "inbound" ? call.from_number : call.to_number;
+  const phoneRaw =
+    collected.customer_phone ||
+    custom.customer_phone ||
+    (call.direction === "inbound" ? call.from_number : call.to_number);
+  const phone = normalizePhone(phoneRaw);
+
+  const address = collected.site_address || custom.site_address || undefined;
+  const jobScope = collected.job_scope || custom.job_scope || undefined;
+  const preferredTime =
+    collected.preferred_time || custom.preferred_time || undefined;
 
   return {
     firstName: firstName || undefined,
     lastName: lastName || undefined,
     email,
-    phone
+    phone,
+    address,
+    jobScope,
+    preferredTime
   };
 }
 
 /**
- * Parses the appointment date (and optional time) from custom_analysis_data
- * into a millisecond timestamp HubSpot can use for the meeting start time.
- * Defaults to 9:00 AM local server time if no time is provided, and defaults
- * to a 30 minute duration.
+ * Best-effort normalization so "1234567890" and "+11234567890" don't end up
+ * as separate contacts. Assumes US numbers when no country code is present.
  */
-function resolveAppointmentTime(custom: RetellCustomAnalysisData): {
+function normalizePhone(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const digits = raw.replace(/[^\d]/g, "");
+  if (!digits) return undefined;
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return raw.startsWith("+") ? raw : `+${digits}`;
+}
+
+/**
+ * Parses the free-text `preferred_time` string (e.g. "Wednesday, July 2,
+ * 2025 at 12:00 PM Pacific") into a millisecond timestamp. JS's Date parser
+ * handles most of these natural-language formats directly; if parsing
+ * fails, falls back to "now" so the meeting is still created and can be
+ * corrected manually in HubSpot. Defaults to a 60 minute duration, since
+ * these are typically on-site estimate visits.
+ */
+function resolveAppointmentTime(preferredTime?: string): {
   startMs: number;
   endMs: number;
+  parsed: boolean;
 } {
-  const dateStr = custom.appointment_date; // "2024-05-07"
-  const timeStr = custom.appointment_time; // optional, e.g. "14:00"
+  let start: Date | undefined;
 
-  let start: Date;
-  if (dateStr) {
-    const isoString = timeStr
-      ? `${dateStr}T${timeStr}:00`
-      : `${dateStr}T09:00:00`;
-    start = new Date(isoString);
-    if (isNaN(start.getTime())) {
-      // Fallback if parsing fails
-      start = new Date();
+  if (preferredTime) {
+    // Strip trailing timezone names like "Pacific"/"Eastern" that Date.parse
+    // doesn't reliably understand, and let it parse the rest.
+    const cleaned = preferredTime
+      .replace(/\b(Pacific|Eastern|Central|Mountain)\b\s*$/i, "")
+      .trim();
+    const candidate = new Date(cleaned);
+    if (!isNaN(candidate.getTime())) {
+      start = candidate;
     }
-  } else {
-    start = new Date();
   }
 
-  const durationMs = 30 * 60 * 1000; // 30 minute default appointment
-  return { startMs: start.getTime(), endMs: start.getTime() + durationMs };
+  const parsed = !!start;
+  if (!start) start = new Date();
+
+  const durationMs = 60 * 60 * 1000; // 60 minute default for on-site estimates
+  return {
+    startMs: start.getTime(),
+    endMs: start.getTime() + durationMs,
+    parsed
+  };
 }
 
 /**
@@ -200,6 +238,7 @@ async function upsertContact(info: {
   lastName?: string;
   email?: string;
   phone?: string;
+  address?: string;
 }): Promise<string> {
   const searchFilters: {
     propertyName: string;
@@ -224,7 +263,7 @@ async function upsertContact(info: {
   if (searchFilters.length > 0) {
     const searchResult = await hubspotClient.crm.contacts.searchApi.doSearch({
       filterGroups: [{ filters: searchFilters }],
-      properties: ["firstname", "lastname", "email", "phone"],
+      properties: ["firstname", "lastname", "email", "phone", "address"],
       limit: 1
     });
 
@@ -237,7 +276,8 @@ async function upsertContact(info: {
           ...(info.firstName ? { firstname: info.firstName } : {}),
           ...(info.lastName ? { lastname: info.lastName } : {}),
           ...(info.email ? { email: info.email } : {}),
-          ...(info.phone ? { phone: info.phone } : {})
+          ...(info.phone ? { phone: info.phone } : {}),
+          ...(info.address ? { address: info.address } : {})
         }
       });
 
@@ -251,7 +291,8 @@ async function upsertContact(info: {
       ...(info.firstName ? { firstname: info.firstName } : {}),
       ...(info.lastName ? { lastname: info.lastName } : {}),
       ...(info.email ? { email: info.email } : {}),
-      ...(info.phone ? { phone: info.phone } : {})
+      ...(info.phone ? { phone: info.phone } : {}),
+      ...(info.address ? { address: info.address } : {})
     }
   });
 
@@ -260,20 +301,33 @@ async function upsertContact(info: {
 
 /**
  * Creates a Meeting engagement in HubSpot, associated with the given
- * contact, representing the booked appointment.
+ * contact, representing the requested on-site estimate/appointment.
  */
 async function createAppointment(params: {
   contactId: string;
   call: RetellCall;
+  jobScope?: string;
+  address?: string;
   startMs: number;
   endMs: number;
+  timeWasParsed: boolean;
 }): Promise<string> {
-  const { contactId, call, startMs, endMs } = params;
+  const { contactId, call, jobScope, address, startMs, endMs, timeWasParsed } =
+    params;
+
+  const bodyParts = [call.call_analysis.call_summary];
+  if (jobScope) bodyParts.push(`Job scope: ${jobScope}`);
+  if (address) bodyParts.push(`Site address: ${address}`);
+  if (!timeWasParsed) {
+    bodyParts.push(
+      "NOTE: Could not automatically parse the requested appointment time from the call; defaulted to call time. Please confirm with the customer."
+    );
+  }
 
   const meeting = await hubspotClient.crm.objects.meetings.basicApi.create({
     properties: {
-      hs_meeting_title: "Appointment booked via AI call agent",
-      hs_meeting_body: call.call_analysis.call_summary,
+      hs_meeting_title: "Estimate appointment requested via AI call agent",
+      hs_meeting_body: bodyParts.join("\n\n"),
       hs_meeting_start_time: new Date(startMs).toISOString(),
       hs_meeting_end_time: new Date(endMs).toISOString(),
       hs_meeting_outcome: "SCHEDULED",
