@@ -81,10 +81,9 @@ app.post("/webhooks/retell", async (req: Request, res: Response) => {
   try {
     const payload = req.body as RetellWebhookPayload;
 
-    console.log("Payload event for retell call:" + payload.event);
-
     if (payload.event !== "call_analyzed") {
       // Acknowledge but ignore events we don't care about
+      console.log("Event was not call_analyzed");
       return res.status(200).json({ received: true, skipped: true });
     }
 
@@ -93,6 +92,7 @@ app.post("/webhooks/retell", async (req: Request, res: Response) => {
 
     if (!custom.appointment_booked) {
       // Nothing to create in HubSpot for this call
+      console.log("Appontment was not booked");
       return res.status(200).json({ received: true, appointmentBooked: false });
     }
 
