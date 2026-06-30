@@ -107,6 +107,13 @@ app.post("/webhooks/retell", async (req: Request, res: Response) => {
       endMs
     });
 
+    console.log(
+      "Appointment booked - contactId: " +
+        contactId +
+        " meetingId: " +
+        meetingId
+    );
+
     return res.status(200).json({
       received: true,
       contactId,
